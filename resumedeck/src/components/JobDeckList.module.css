@@ -1,0 +1,118 @@
+.heading {
+  margin: 0 0 10px 2px;
+  color: var(--on-navy-soft);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.job {
+  /* Contain the absolutely positioned .sr-only text inside the horizontal scroller. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 11px 12px;
+  border-radius: var(--radius);
+  background: var(--navy-deep);
+  color: var(--on-navy);
+  text-decoration: none;
+  border: 1px solid var(--navy-line);
+}
+.job:hover {
+  background: #33435a;
+}
+.job[data-selected] {
+  background: var(--paper);
+  border-color: var(--paper);
+  color: var(--ink);
+}
+.title {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.25;
+}
+.location {
+  font-size: 13px;
+  color: var(--on-navy-soft);
+}
+.job[data-selected] .location,
+.job[data-selected] .meta {
+  color: var(--ink-muted);
+}
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--on-navy-soft);
+}
+.pill {
+  min-width: 28px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: var(--on-fill);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+}
+.pill[data-pulse] {
+  animation: pulse 1.6s ease-out 1;
+}
+@keyframes pulse {
+  0% {
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(86, 188, 138, 0.8);
+    transform: scale(1.15);
+  }
+  60% {
+    background: var(--green);
+    box-shadow: 0 0 0 10px rgba(86, 188, 138, 0);
+    transform: scale(1);
+  }
+  100% {
+    background: var(--blue);
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .heading {
+    margin-left: 18px;
+  }
+  .list {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 0 16px 4px;
+    scroll-snap-type: x proximity;
+  }
+  .list li {
+    flex: 0 0 72%;
+    max-width: 260px;
+    scroll-snap-align: start;
+  }
+  .job {
+    height: 100%;
+  }
+}
+
+.empty {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--navy-line);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--on-navy-soft);
+}

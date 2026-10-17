@@ -1,0 +1,13 @@
+.back {
+  display: inline-block;
+  margin-bottom: 12px;
+  color: var(--on-navy);
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 2px;
+}
+.pending {
+  margin: 0 0 12px;
+  padding: 12px 16px;
+  border-left: 5px solid var(--yellow);
+}
