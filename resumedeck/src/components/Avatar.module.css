@@ -1,0 +1,18 @@
+.avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  font-family: var(--font-display);
+  font-weight: 800;
+  color: var(--on-fill);
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+.avatar[data-color="blue"] { background: var(--blue); }
+.avatar[data-color="green"] { background: var(--green); }
+.avatar[data-color="red"] { background: var(--red); }
+.avatar[data-color="yellow"] { background: var(--yellow); }
+.avatar[data-color="purple"] { background: var(--purple); }
+.avatar[data-color="pink"] { background: var(--pink); }

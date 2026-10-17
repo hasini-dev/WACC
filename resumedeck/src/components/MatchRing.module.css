@@ -1,0 +1,32 @@
+.ring {
+  --ring: var(--green);
+  flex: none;
+  border-radius: 50%;
+  padding: 7px;
+  background: conic-gradient(var(--ring) var(--pct), var(--rule) 0);
+}
+.ring[data-band="mid"] { --ring: var(--yellow); }
+.ring[data-band="low"] { --ring: var(--red); }
+.inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--paper);
+}
+.num {
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--ink);
+}
+.unit {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-top: 0.5em;
+}

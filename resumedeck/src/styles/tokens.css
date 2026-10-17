@@ -1,0 +1,46 @@
+:root {
+  /* Page */
+  --navy: #36465d;
+  --navy-deep: #2b3a4f;
+  --navy-line: #4a5a71;
+
+  /* Posts */
+  --paper: #ffffff;
+  --paper-2: #f4f6f8;
+  --ink: #444444;
+  --ink-soft: #7c8794; /* decorative / large text only: 3.7:1 on white */
+  --ink-muted: #66717e; /* small secondary text: 5:1 on white (AA) */
+  --rule: #e6e9ed;
+
+  --on-navy: #ffffff;
+  --on-navy-soft: #a9b4c2;
+
+  /* Tumblr post-type colors (fills) */
+  --blue: #529ecc;
+  --green: #56bc8a;
+  --red: #d95e40;
+  --yellow: #f2992e;
+  --purple: #a77dc2;
+  --pink: #e17bae;
+
+  /* Same hues darkened for text/icons on white (all ≥ 4.5:1) */
+  --blue-ink: #2a6f9b;
+  --green-ink: #217a4f;
+  --red-ink: #b2412a;
+  --yellow-ink: #9a5a0c;
+  --purple-ink: #7a4f96;
+  --pink-ink: #a83c72;
+
+  /* Text on colored fills (≥ 4.6:1 on every post-type color, including red and purple) */
+  --on-fill: #141c27;
+
+  /* Type */
+  --font-display: var(--font-montserrat), "Helvetica Neue", Arial, sans-serif;
+  --font-body: var(--font-source-sans), "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-source-code), ui-monospace, Menlo, monospace;
+
+  /* Shape */
+  --radius: 4px;
+  --topbar-h: 54px;
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--navy-deep);
+}
