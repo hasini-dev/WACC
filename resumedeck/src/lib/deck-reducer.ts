@@ -1,70 +1,65 @@
-import type { Application } from "@/types/applicant";
-import { statusFromDecision, type ApplicationStatus, type Decision, type Review } from "@/types/review";
-import type { IncomingFile } from "@/lib/mock-data";
+import type { Applicant, Application } from "@/types/applicant";
+import type { DeckCard, JobSummary, PipelineStatus, UndoEntry } from "@/types/api";
+import type { ApplicationStatus, Decision } from "@/types/review";
 
-export type LogLevel = "db" | "txt" | "ocr" | "ok" | "err" | "dup";
-
-export interface LogEntry {
-  id: number;
-  at: string;
-  level: LogLevel;
-  text: string;
-}
-
-export interface NeedsReviewItem {
-  fileName: string;
-  reason: string;
-  at: string;
-}
-
+/**
+ * Client view of the server's data plus optimistic updates. The server is the
+ * source of truth (append-only reviews); this state only decides *order*: the
+ * card on top never changes because of a refresh, undone cards return to the
+ * top, and arrivals are inserted by rank from position 2 down.
+ */
 export interface DeckState {
+  jobs: JobSummary[] | null;
   applications: Record<string, Application>;
+  applicants: Record<string, Applicant>;
+  status: Record<string, ApplicationStatus>;
   /** Per job: application ids still to review, top card first. */
   order: Record<string, string[]>;
-  /** Append-only review log. */
-  reviews: Review[];
-  /** When each application's file landed in the resume database (ISO). */
+  /** Per job: the current user's undoable reviews, newest first. */
+  undo: Record<string, UndoEntry[]>;
   receivedAt: Record<string, string>;
-  seen: Record<string, true>;
-  incoming: IncomingFile[];
-  syncPaused: boolean;
-  processed: number;
-  total: number;
-  log: LogEntry[];
-  needsReview: NeedsReviewItem[];
-  /** Per job: bumps each time a new applicant arrives (drives the pill pulse). */
+  /** Status before a "move back to deck", so undoing it can be shown immediately. */
+  resetPrev: Record<string, ApplicationStatus>;
   arrivals: Record<string, number>;
-  seq: number;
+  loaded: Record<string, true>;
+  pipeline: PipelineStatus | null;
 }
 
 export type DeckAction =
-  | { type: "decide"; reviewId: string; applicationId: string; decision: Exclude<Decision, "reset">; now: string }
-  | { type: "reset"; reviewId: string; applicationId: string; now: string }
-  | { type: "undo"; reviewId: string; now: string }
-  | { type: "markSeen"; applicationId: string }
-  | { type: "setSyncPaused"; paused: boolean }
-  | { type: "pullNext"; now: string; incomingApplication?: Application; label?: string };
+  | { type: "jobsLoaded"; jobs: JobSummary[] }
+  | { type: "pipelineLoaded"; pipeline: PipelineStatus }
+  | { type: "deckLoaded"; jobId: string; cards: DeckCard[]; undo: UndoEntry[] }
+  | { type: "decide"; jobId: string; review: UndoEntry }
+  | { type: "reset"; jobId: string; review: UndoEntry }
+  | { type: "reviewConfirmed"; jobId: string; tempId: string; review: UndoEntry }
+  | { type: "undo"; jobId: string; reviewId: string }
+  | { type: "restore"; state: DeckState };
+
+export const emptyDeckState = (): DeckState => ({
+  jobs: null,
+  applications: {},
+  applicants: {},
+  status: {},
+  order: {},
+  undo: {},
+  receivedAt: {},
+  resetPrev: {},
+  arrivals: {},
+  loaded: {},
+  pipeline: null,
+});
 
 export function compareApplications(a: Application, b: Application): number {
   if (b.match.score !== a.match.score) return b.match.score - a.match.score;
   return a.appliedAt.localeCompare(b.appliedAt);
 }
 
-/**
- * Insert by rank, but never at an index below `minIndex` — so a new arrival can
- * never replace the card the recruiter is currently looking at.
- */
-export function insertByRank(
-  order: string[],
-  id: string,
-  apps: Record<string, Application>,
-  minIndex = 1,
-): string[] {
+/** Insert by rank, never at an index below `minIndex`, so the top card is never replaced. */
+export function insertByRank(order: string[], id: string, apps: Record<string, Application>, minIndex = 1): string[] {
   const app = apps[id];
   if (!app) return order;
   const without = order.filter((x) => x !== id);
-  const start = Math.min(minIndex, without.length);
-  let i = start;
+  let i = Math.min(minIndex, without.length);
   while (i < without.length) {
     const other = apps[without[i]!];
     if (other && compareApplications(app, other) < 0) break;
@@ -73,158 +68,121 @@ export function insertByRank(
   return [...without.slice(0, i), id, ...without.slice(i)];
 }
 
-export function statusOf(reviews: Review[], applicationId: string): ApplicationStatus {
-  for (let i = reviews.length - 1; i >= 0; i--) {
-    const r = reviews[i]!;
-    if (r.applicationId === applicationId && r.undoneAt === null) return statusFromDecision(r.decision);
-  }
-  return "to_review";
-}
-
-/** Most recent un-undone reviews for a job, newest first. */
-export function undoStack(state: DeckState, jobId: string): Review[] {
-  return state.reviews.filter((r) => r.jobId === jobId && r.undoneAt === null).reverse();
-}
-
-export function applicationsWithStatus(state: DeckState, jobId: string, status: Exclude<ApplicationStatus, "to_review">) {
+export function applicationsWithStatus(state: DeckState, jobId: string, status: ApplicationStatus): Application[] {
   return Object.values(state.applications)
-    .filter((a) => a.jobId === jobId && statusOf(state.reviews, a.id) === status)
+    .filter((a) => a.jobId === jobId && state.status[a.id] === status)
     .sort(compareApplications);
 }
 
-function addLog(state: DeckState, entries: Array<Omit<LogEntry, "id">>): Pick<DeckState, "log" | "seq"> {
-  let seq = state.seq;
-  const added = entries.map((e) => ({ ...e, id: ++seq }));
-  return { log: [...added.reverse(), ...state.log].slice(0, 60), seq };
+/** Counts for the rail: live local numbers once a job's deck is loaded, server counts before. */
+export function jobCounts(state: DeckState, job: JobSummary) {
+  if (!state.loaded[job.id]) return job.counts;
+  return {
+    to_review: state.order[job.id]?.length ?? 0,
+    shortlist: applicationsWithStatus(state, job.id, "shortlist").length,
+    pass: applicationsWithStatus(state, job.id, "pass").length,
+  };
 }
 
-export function initDeckState(params: {
-  applications: Application[];
-  receivedAt: Record<string, string>;
-  incoming: IncomingFile[];
-  initialLog: Array<Omit<LogEntry, "id">>;
-  seen?: string[];
-}): DeckState {
-  const applications = Object.fromEntries(params.applications.map((a) => [a.id, a]));
-  const order: Record<string, string[]> = {};
-  for (const a of [...params.applications].sort(compareApplications)) {
-    (order[a.jobId] ??= []).push(a.id);
-  }
-  const base: DeckState = {
-    applications,
-    order,
-    reviews: [],
-    receivedAt: params.receivedAt,
-    seen: Object.fromEntries((params.seen ?? []).map((id) => [id, true as const])),
-    incoming: params.incoming,
-    syncPaused: false,
-    processed: params.applications.length,
-    total: params.applications.length + params.incoming.length,
-    log: [],
-    needsReview: [],
-    arrivals: {},
-    seq: 0,
-  };
-  return { ...base, ...addLog(base, params.initialLog) };
-}
+const statusFor = (d: Decision): ApplicationStatus => (d === "reset" ? "to_review" : d);
 
 export function deckReducer(state: DeckState, action: DeckAction): DeckState {
   switch (action.type) {
-    case "decide": {
-      const app = state.applications[action.applicationId];
-      if (!app || statusOf(state.reviews, app.id) !== "to_review") return state;
-      const review: Review = {
-        id: action.reviewId,
-        applicationId: app.id,
-        jobId: app.jobId,
-        decision: action.decision,
-        createdAt: action.now,
-        undoneAt: null,
-      };
+    case "jobsLoaded":
+      return { ...state, jobs: action.jobs };
+
+    case "pipelineLoaded":
+      return { ...state, pipeline: action.pipeline };
+
+    case "restore":
+      return action.state;
+
+    case "deckLoaded": {
+      const applications = { ...state.applications };
+      const applicants = { ...state.applicants };
+      const status = { ...state.status };
+      const receivedAt = { ...state.receivedAt };
+      let newArrivals = 0;
+      for (const c of action.cards) {
+        if (!applications[c.application.id] && state.loaded[action.jobId]) newArrivals++;
+        applications[c.application.id] = c.application;
+        // Keep a richer copy (with raw text) if we fetched one for the detail view.
+        const prev = applicants[c.applicant.id];
+        applicants[c.applicant.id] = prev?.file.rawText ? { ...c.applicant, file: prev.file } : c.applicant;
+        status[c.application.id] = c.status;
+        receivedAt[c.application.id] = c.receivedAt;
+      }
+      const serverToReview = action.cards.filter((c) => c.status === "to_review").map((c) => c.application.id);
+      const keep = new Set(serverToReview);
+      let order = (state.order[action.jobId] ?? []).filter((id) => keep.has(id));
+      if (!state.loaded[action.jobId] || order.length === 0) {
+        order = serverToReview;
+      } else {
+        for (const id of serverToReview) if (!order.includes(id)) order = insertByRank(order, id, applications);
+      }
       return {
         ...state,
-        reviews: [...state.reviews, review],
-        order: { ...state.order, [app.jobId]: (state.order[app.jobId] ?? []).filter((id) => id !== app.id) },
-        seen: { ...state.seen, [app.id]: true },
+        applications,
+        applicants,
+        status,
+        receivedAt,
+        order: { ...state.order, [action.jobId]: order },
+        undo: { ...state.undo, [action.jobId]: action.undo },
+        loaded: { ...state.loaded, [action.jobId]: true },
+        arrivals: newArrivals ? { ...state.arrivals, [action.jobId]: (state.arrivals[action.jobId] ?? 0) + newArrivals } : state.arrivals,
+      };
+    }
+
+    case "decide": {
+      const { applicationId } = action.review;
+      if (state.status[applicationId] !== "to_review") return state;
+      return {
+        ...state,
+        status: { ...state.status, [applicationId]: statusFor(action.review.decision) },
+        order: { ...state.order, [action.jobId]: (state.order[action.jobId] ?? []).filter((id) => id !== applicationId) },
+        undo: { ...state.undo, [action.jobId]: [action.review, ...(state.undo[action.jobId] ?? [])] },
       };
     }
 
     case "reset": {
-      const app = state.applications[action.applicationId];
-      if (!app || statusOf(state.reviews, app.id) === "to_review") return state;
-      const review: Review = {
-        id: action.reviewId,
-        applicationId: app.id,
-        jobId: app.jobId,
-        decision: "reset",
-        createdAt: action.now,
-        undoneAt: null,
-      };
+      const { applicationId } = action.review;
+      const prev = state.status[applicationId];
+      if (!prev || prev === "to_review") return state;
       return {
         ...state,
-        reviews: [...state.reviews, review],
-        order: { ...state.order, [app.jobId]: insertByRank(state.order[app.jobId] ?? [], app.id, state.applications) },
+        status: { ...state.status, [applicationId]: "to_review" },
+        order: { ...state.order, [action.jobId]: insertByRank(state.order[action.jobId] ?? [], applicationId, state.applications) },
+        undo: { ...state.undo, [action.jobId]: [action.review, ...(state.undo[action.jobId] ?? [])] },
+        resetPrev: { ...state.resetPrev, [action.review.reviewId]: prev },
       };
+    }
+
+    case "reviewConfirmed": {
+      const swap = (e: UndoEntry) => (e.reviewId === action.tempId ? action.review : e);
+      const resetPrev = { ...state.resetPrev };
+      if (resetPrev[action.tempId]) {
+        resetPrev[action.review.reviewId] = resetPrev[action.tempId]!;
+        delete resetPrev[action.tempId];
+      }
+      return { ...state, undo: { ...state.undo, [action.jobId]: (state.undo[action.jobId] ?? []).map(swap) }, resetPrev };
     }
 
     case "undo": {
-      const idx = state.reviews.findIndex((r) => r.id === action.reviewId && r.undoneAt === null);
-      if (idx < 0) return state;
-      const target = state.reviews[idx]!;
-      const before = statusOf(state.reviews, target.applicationId);
-      const reviews = state.reviews.map((r, i) => (i === idx ? { ...r, undoneAt: action.now } : r));
-      const after = statusOf(reviews, target.applicationId);
-      let jobOrder = state.order[target.jobId] ?? [];
-      if (before !== "to_review" && after === "to_review") {
+      const entry = (state.undo[action.jobId] ?? []).find((e) => e.reviewId === action.reviewId);
+      if (!entry) return state;
+      const { applicationId } = entry;
+      const undo = { ...state.undo, [action.jobId]: (state.undo[action.jobId] ?? []).filter((e) => e !== entry) };
+      let jobOrder = (state.order[action.jobId] ?? []).filter((id) => id !== applicationId);
+      let next: ApplicationStatus;
+      if (entry.decision === "reset") {
+        next = state.resetPrev[entry.reviewId] ?? state.status[applicationId] ?? "to_review";
+        if (next === "to_review") jobOrder = insertByRank(jobOrder, applicationId, state.applications);
+      } else {
         // Undoing a decision puts that card back on top of the deck.
-        jobOrder = [target.applicationId, ...jobOrder.filter((id) => id !== target.applicationId)];
-      } else if (before === "to_review" && after !== "to_review") {
-        jobOrder = jobOrder.filter((id) => id !== target.applicationId);
+        next = "to_review";
+        jobOrder = [applicationId, ...jobOrder];
       }
-      return { ...state, reviews, order: { ...state.order, [target.jobId]: jobOrder } };
-    }
-
-    case "markSeen":
-      if (state.seen[action.applicationId]) return state;
-      return { ...state, seen: { ...state.seen, [action.applicationId]: true } };
-
-    case "setSyncPaused":
-      return { ...state, syncPaused: action.paused };
-
-    case "pullNext": {
-      const [file, ...rest] = state.incoming;
-      if (!file) return state;
-      const base = { ...state, incoming: rest, processed: state.processed + 1 };
-      if (file.kind === "corrupt") {
-        return {
-          ...base,
-          needsReview: [{ fileName: file.fileName, reason: file.reason, at: action.now }, ...state.needsReview],
-          ...addLog(state, [
-            { at: action.now, level: "db", text: `DB fetched ${file.fileName}` },
-            { at: action.now, level: "err", text: `ERR ${file.fileName}: ${file.reason} → Needs review` },
-          ]),
-        };
-      }
-      const app = action.incomingApplication;
-      if (!app || app.id !== file.applicationId) return state;
-      const applications = { ...state.applications, [app.id]: app };
-      return {
-        ...base,
-        applications,
-        receivedAt: { ...state.receivedAt, [app.id]: action.now },
-        order: { ...state.order, [app.jobId]: insertByRank(state.order[app.jobId] ?? [], app.id, applications) },
-        arrivals: { ...state.arrivals, [app.jobId]: (state.arrivals[app.jobId] ?? 0) + 1 },
-        ...addLog(state, [
-          { at: action.now, level: "db", text: `DB fetched ${file.fileName}` },
-          ...file.ocrPages.map((p) => ({ at: action.now, level: "ocr" as const, text: `OCR used on page ${p}` })),
-          {
-            at: action.now,
-            level: "txt" as const,
-            text: `TXT extracted ${file.chars.toLocaleString("en-US")} chars · ${file.sections} sections`,
-          },
-          { at: action.now, level: "ok" as const, text: `OK ${action.label ?? app.id}` },
-        ]),
-      };
+      return { ...state, undo, status: { ...state.status, [applicationId]: next }, order: { ...state.order, [action.jobId]: jobOrder } };
     }
   }
 }

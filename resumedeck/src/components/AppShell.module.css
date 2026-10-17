@@ -90,6 +90,27 @@
   text-align: center;
 }
 
+.account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  font-size: 13px;
+  color: var(--on-navy-soft);
+}
+.keys + .account {
+  margin-left: 18px;
+}
+.account button {
+  padding: 3px 9px;
+  border: 1px solid var(--navy-line);
+  border-radius: var(--radius);
+  background: var(--navy);
+  color: var(--on-navy);
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 210px minmax(0, 560px) minmax(0, 1fr);
@@ -118,6 +139,9 @@
   .keys {
     display: none;
   }
+  .account {
+    margin-left: auto;
+  }
   .shell {
     grid-template-columns: 200px minmax(0, 1fr);
   }
@@ -130,6 +154,10 @@
 @media (max-width: 720px) {
   .hiring {
     font-size: 13px;
+  }
+  .hiring strong,
+  .email {
+    display: none;
   }
   .shell {
     grid-template-columns: minmax(0, 1fr);

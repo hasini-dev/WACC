@@ -2,16 +2,23 @@
 
 import { useDeck } from "@/lib/deck-store";
 import { WEIGHTS } from "@/lib/match-scoring";
-import { RESUME_DB_SOURCE } from "@/lib/mock-data";
 import { ClockTime } from "./TimeAgo";
 import styles from "./ResumeDbPanel.module.css";
 
+const STATUS_TEXT = {
+  live: "Syncing",
+  paused: "Paused",
+  idle: "Up to date",
+  offline: "Worker offline",
+  error: "Sync error",
+} as const;
+
 export function ResumeDbPanel() {
-  const { state, setSyncPaused, pullNext } = useDeck();
-  const done = state.incoming.length === 0;
-  const status = done ? "idle" : state.syncPaused ? "paused" : "live";
-  const statusText = { live: "Syncing", paused: "Paused", idle: "Up to date" }[status];
-  const pct = state.total ? Math.round((state.processed / state.total) * 100) : 100;
+  const { state, me, pipelineAction } = useDeck();
+  const p = state.pipeline;
+  const status = p?.state ?? "offline";
+  const pct = p && p.total ? Math.round((p.processed / p.total) * 100) : 0;
+  const canControl = me.role !== "viewer" && status !== "offline";
 
   return (
     <>
@@ -22,15 +29,21 @@ export function ResumeDbPanel() {
           </h2>
           <span className={styles.status} data-status={status}>
             <span className={styles.dot} aria-hidden="true" />
-            {statusText}
+            {p ? STATUS_TEXT[status] : "Connecting…"}
           </span>
         </div>
-        <p className={styles.source}>{RESUME_DB_SOURCE}</p>
+        <p className={styles.source}>{p?.source ?? "…"}</p>
+        {status === "offline" && p && (
+          <p className={styles.note}>
+            The background worker isn&apos;t running. Start it with <code>npm run worker</code>.
+          </p>
+        )}
+        {p?.lastError && <p className={styles.note}>Last sync failed: {p.lastError}</p>}
 
         <div className={styles.progressRow}>
           <span>Files processed</span>
           <span>
-            {state.processed} / {state.total}
+            {p?.processed ?? 0} / {p?.total ?? 0}
           </span>
         </div>
         <div
@@ -38,8 +51,8 @@ export function ResumeDbPanel() {
           role="progressbar"
           aria-label="Files processed"
           aria-valuemin={0}
-          aria-valuemax={state.total}
-          aria-valuenow={state.processed}
+          aria-valuemax={p?.total ?? 0}
+          aria-valuenow={p?.processed ?? 0}
         >
           <span style={{ width: `${pct}%` }} />
         </div>
@@ -48,20 +61,20 @@ export function ResumeDbPanel() {
           <button
             type="button"
             className={styles.btn}
-            onClick={() => setSyncPaused(!state.syncPaused)}
-            disabled={done}
-            aria-pressed={state.syncPaused}
+            onClick={() => pipelineAction(status === "paused" ? "resume" : "pause")}
+            disabled={!canControl}
+            aria-pressed={status === "paused"}
           >
-            {state.syncPaused ? "Resume sync" : "Pause sync"}
+            {status === "paused" ? "Resume sync" : "Pause sync"}
           </button>
-          <button type="button" className={styles.btn} onClick={pullNext} disabled={done}>
+          <button type="button" className={styles.btn} onClick={() => pipelineAction("pull")} disabled={!canControl}>
             Pull next file now
           </button>
         </div>
 
         <h3 className={styles.logHeading}>Activity</h3>
         <ol className={styles.log} aria-label="Pipeline activity log" tabIndex={0}>
-          {state.log.map((e) => (
+          {(p?.events ?? []).map((e) => (
             <li key={e.id} data-level={e.level}>
               <span className={styles.time}>
                 <ClockTime iso={e.at} />
@@ -69,6 +82,7 @@ export function ResumeDbPanel() {
               <span className={styles.msg}>{e.text}</span>
             </li>
           ))}
+          {p && p.events.length === 0 && <li className={styles.msg}>No activity yet.</li>}
         </ol>
       </section>
 

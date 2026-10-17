@@ -9,3 +9,8 @@ test-results/
 next-env.d.ts
 .env*.local
 .DS_Store
+
+# local prototype data + OCR language cache
+.data/
+*.traineddata
+.data-e2e/

@@ -2,31 +2,21 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ApplicantPageView } from "@/components/ApplicantPageView";
-import { APPLICANTS, APPLICANTS_BY_ID, APPLICATIONS_BY_ID } from "@/lib/mock-data";
+import { requirePageMe } from "@/lib/page-auth";
+import { applicantDetail, getJob } from "@/lib/repo";
 
-export function generateStaticParams() {
-  return APPLICANTS.map((a) => ({ applicantId: a.id }));
-}
-
-function findApplication(applicantId: string) {
-  return [...APPLICATIONS_BY_ID.values()].find((a) => a.applicantId === applicantId);
-}
-
-export async function generateMetadata({ params }: PageProps<"/applicants/[applicantId]">): Promise<Metadata> {
-  const { applicantId } = await params;
-  const applicant = APPLICANTS_BY_ID.get(applicantId);
-  return { title: applicant ? `${applicant.fullName} · clicked` : "Applicant not found · clicked" };
-}
+export const metadata: Metadata = { title: "Resume · clicked" };
 
 export default async function ApplicantPage({ params }: PageProps<"/applicants/[applicantId]">) {
   const { applicantId } = await params;
-  const applicant = APPLICANTS_BY_ID.get(applicantId);
-  const application = findApplication(applicantId);
-  if (!applicant || !application) notFound();
+  const me = await requirePageMe();
+  const card = applicantDetail(me.orgId, applicantId);
+  const job = card ? getJob(me.orgId, card.application.jobId) : null;
+  if (!card || !job) notFound();
   return (
-    <AppShell selectedJobId={application.jobId}>
-      <h1 className="sr-only">Resume: {applicant.fullName}</h1>
-      <ApplicantPageView applicationId={application.id} />
+    <AppShell me={me} selectedJobId={job.id}>
+      <h1 className="sr-only">Resume: {card.applicant.fullName}</h1>
+      <ApplicantPageView card={card} job={job} />
     </AppShell>
   );
 }

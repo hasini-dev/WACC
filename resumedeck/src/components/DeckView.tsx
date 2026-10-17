@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { applicationsWithStatus, statusOf, undoStack } from "@/lib/deck-reducer";
+import { applicationsWithStatus } from "@/lib/deck-reducer";
 import { useDeck } from "@/lib/deck-store";
-import { APPLICANTS_BY_ID } from "@/lib/mock-data";
+import type { Applicant } from "@/types/applicant";
 import type { Job } from "@/types/job";
 import type { ApplicationStatus } from "@/types/review";
 import { Avatar } from "./Avatar";
@@ -36,26 +36,38 @@ const TABS: Array<{ id: ApplicationStatus; label: string }> = [
   { id: "pass", label: "Passed" },
 ];
 
+/** "New" badge: arrived in the last hour and not yet opened in this browser. */
+function isRecent(iso: string | undefined): boolean {
+  return !!iso && Date.now() - Date.parse(iso) < 60 * 60_000;
+}
+
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   return el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
 }
 
 export function DeckView({ job }: { job: Job }) {
-  const { state, decide, moveBack, undo, undoLatest, markSeen, toast, dismissToast } = useDeck();
+  const { state, decide, moveBack, undo, undoLatest, watchJob, seen, markSeen, loadApplicant, toast, dismissToast } = useDeck();
   const [tab, setTab] = useState<ApplicationStatus>("to_review");
   const [exiting, setExiting] = useState<{ id: string; dir: SwipeDirection } | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const reducedMotion = usePrefersReducedMotion();
   const exitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [fullApplicant, setFullApplicant] = useState<Applicant | null>(null);
+
+  useEffect(() => {
+    watchJob(job.id);
+    return () => watchJob(null);
+  }, [job.id, watchJob]);
 
   const order = state.order[job.id] ?? [];
   const topId = order[0];
   const top = topId ? state.applications[topId] : undefined;
-  const topApplicant = top ? APPLICANTS_BY_ID.get(top.applicantId) : undefined;
+  const topApplicant = top ? state.applicants[top.applicantId] : undefined;
+  const loaded = !!state.loaded[job.id];
   const shortlisted = applicationsWithStatus(state, job.id, "shortlist");
   const passed = applicationsWithStatus(state, job.id, "pass");
-  const canUndo = undoStack(state, job.id).length > 0;
+  const canUndo = (state.undo[job.id]?.length ?? 0) > 0;
   const counts: Record<ApplicationStatus, number> = { to_review: order.length, shortlist: shortlisted.length, pass: passed.length };
 
   useEffect(() => () => clearTimeout(exitTimer.current), []);
@@ -65,16 +77,16 @@ export function DeckView({ job }: { job: Job }) {
       if (!top || exiting) return;
       const decision = dir === "right" ? "shortlist" : "pass";
       if (reducedMotion) {
-        decide(top.id, decision);
+        decide(job.id, top.id, decision);
         return;
       }
       setExiting({ id: top.id, dir });
       exitTimer.current = setTimeout(() => {
-        decide(top.id, decision);
+        decide(job.id, top.id, decision);
         setExiting(null);
       }, EXIT_MS);
     },
-    [top, exiting, reducedMotion, decide],
+    [top, exiting, reducedMotion, decide, job.id],
   );
 
   const handleUndo = useCallback(() => {
@@ -86,8 +98,11 @@ export function DeckView({ job }: { job: Job }) {
     (id: string) => {
       markSeen(id);
       setOpenId(id);
+      setFullApplicant(null);
+      const app = state.applications[id];
+      if (app) void loadApplicant(app.applicantId).then((card) => card && setFullApplicant(card.applicant));
     },
-    [markSeen],
+    [markSeen, loadApplicant, state.applications],
   );
 
   // Global keyboard shortcuts. Ignored while typing, inside the tab list, or with the modal open.
@@ -135,8 +150,9 @@ export function DeckView({ job }: { job: Job }) {
   };
 
   const openApp = openId ? state.applications[openId] : undefined;
-  const openApplicant = openApp ? APPLICANTS_BY_ID.get(openApp.applicantId) : undefined;
-  const openStatus = openApp ? statusOf(state.reviews, openApp.id) : "to_review";
+  const listedApplicant = openApp ? state.applicants[openApp.applicantId] : undefined;
+  const openApplicant = fullApplicant && fullApplicant.id === openApp?.applicantId ? fullApplicant : listedApplicant;
+  const openStatus = openApp ? (state.status[openApp.id] ?? "to_review") : "to_review";
   const depth = Math.min(2, Math.max(0, order.length - 1));
 
   return (
@@ -178,7 +194,9 @@ export function DeckView({ job }: { job: Job }) {
       </section>
 
       <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className={styles.panel}>
+        {tab === "to_review" && !loaded && <div className={`post ${styles.empty}`}>Loading deck…</div>}
         {tab === "to_review" &&
+          loaded &&
           (top && topApplicant ? (
             <>
               <div className={styles.deck}>
@@ -192,7 +210,7 @@ export function DeckView({ job }: { job: Job }) {
                     applicant={topApplicant}
                     job={job}
                     receivedAt={state.receivedAt[top.id]}
-                    isNew={!state.seen[top.id]}
+                    isNew={!seen[top.id] && isRecent(state.receivedAt[top.id])}
                     exit={exiting?.id === top.id ? exiting.dir : null}
                     canUndo={canUndo}
                     onSwipe={swipe}
@@ -224,17 +242,19 @@ export function DeckView({ job }: { job: Job }) {
         {tab === "shortlist" && (
           <ReviewedList
             applications={shortlisted}
+            applicants={state.applicants}
             emptyText="No one shortlisted yet. Swipe right or press → on a card to shortlist."
             onOpen={open}
-            onMoveBack={moveBack}
+            onMoveBack={(id) => moveBack(job.id, id)}
           />
         )}
         {tab === "pass" && (
           <ReviewedList
             applications={passed}
+            applicants={state.applicants}
             emptyText="No one passed yet. Swipe left or press ← on a card to pass."
             onOpen={open}
-            onMoveBack={moveBack}
+            onMoveBack={(id) => moveBack(job.id, id)}
           />
         )}
       </div>
@@ -255,17 +275,17 @@ export function DeckView({ job }: { job: Job }) {
             onDecide={(d) => {
               setOpenId(null);
               if (openApp.id === top?.id) swipe(d === "shortlist" ? "right" : "left");
-              else decide(openApp.id, d);
+              else decide(job.id, openApp.id, d);
             }}
             onMoveBack={() => {
               setOpenId(null);
-              moveBack(openApp.id);
+              moveBack(job.id, openApp.id);
             }}
           />
         )}
       </DetailModal>
 
-      <Toast toast={toast} onUndo={undo} onDismiss={dismissToast} />
+      <Toast toast={toast} onUndo={(reviewId) => undo(job.id, reviewId)} onDismiss={dismissToast} />
     </>
   );
 }

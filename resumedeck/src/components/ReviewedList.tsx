@@ -1,24 +1,24 @@
-import type { Application } from "@/types/applicant";
-import { APPLICANTS_BY_ID } from "@/lib/mock-data";
+import type { Applicant, Application } from "@/types/applicant";
 import { scoreBand } from "@/lib/match-scoring";
 import { Avatar } from "./Avatar";
 import styles from "./ReviewedList.module.css";
 
 interface Props {
   applications: Application[];
+  applicants: Record<string, Applicant>;
   emptyText: string;
   onOpen: (applicationId: string) => void;
   onMoveBack: (applicationId: string) => void;
 }
 
-export function ReviewedList({ applications, emptyText, onOpen, onMoveBack }: Props) {
+export function ReviewedList({ applications, applicants, emptyText, onOpen, onMoveBack }: Props) {
   if (applications.length === 0) {
     return <p className={`post ${styles.empty}`}>{emptyText}</p>;
   }
   return (
     <ul className={styles.list}>
       {applications.map((app) => {
-        const ap = APPLICANTS_BY_ID.get(app.applicantId);
+        const ap = applicants[app.applicantId];
         if (!ap) return null;
         return (
           <li key={app.id} className={`post ${styles.row}`}>

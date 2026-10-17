@@ -1,86 +1,102 @@
 # clicked (ResumeDeck)
 
-A recruiter tool styled like a 2016 Tumblr dashboard. Resumes land in a resume database, are parsed and scored against the job they were sent to, and show up as a per-job deck of cards. Swipe right to shortlist, left to pass, undo mistakes, and open any card for the full structured resume.
+A recruiter tool styled like a 2016 Tumblr dashboard. Resume PDFs land in a resume database (a Supabase Storage bucket with one folder per job). A worker extracts the text (with OCR for scans), structures it with an open model, and scores each resume against its job's requirements. Recruiters work through a per-job deck: swipe right to shortlist, left to pass, undo, and open any card for the full resume.
 
-**Current status: Phase 1.** The whole UI runs on typed mock data in the browser. There is no database, auth or PDF pipeline yet.
+**Status: prototype, Phases 1–3 plus most of the Phase 4 scoring engine.** See [What's real vs. stubbed](#whats-real-vs-stubbed).
 
-## Setup
+## Quick start
 
-Requires Node.js 20.9+ (developed on Node 26).
+Requires Node.js 22+ (developed on Node 26; uses the built-in `node:sqlite`).
 
 ```bash
 cd resumedeck
 npm install
-npx playwright install chromium   # once, for the e2e tests
-npm run dev                       # http://localhost:3000 → redirects to /dashboard
+cp .env.example .env.local      # then fill it in (see below)
+npm run demo                    # web app on http://localhost:3000 + background worker
 ```
 
-### Environment variables
+Sign in at `/login` with the `SEED_RECRUITER_EMAIL` address. You'll get a magic-link email from Supabase, and the first sign-in makes that address the org admin.
 
-Phase 1 needs none. `.env.example` lists the variables later phases will read. Copy it to `.env.local` when you get there. Never commit secrets.
+**Offline demo, no bucket or model needed:** set `RESUME_SOURCE=local:tests/fixtures/bucket` and `LLM_PROVIDER=none` in `.env.local`, then `npm run demo`. The fixtures produce 15 scored applicants across 3 decks, plus 1 corrupt file under Needs review.
 
-| Variable | Used from | Purpose |
-| --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Phase 2 | Supabase client |
-| `SUPABASE_SERVICE_ROLE_KEY` | Phase 2 | Workers and server routes only |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Phase 3 | Structured resume extraction |
-| `ENCRYPTION_KEY` | Phase 5 | AES-256-GCM for ATS credentials |
-| `SHOW_MATCH_SCORES` | Phase 4 | Hide scores until calibration passes |
-| `RESUME_POLL_INTERVAL_MS` | Phase 3 | Storage bucket poll interval |
-| `GREENHOUSE_WEBHOOK_SECRET`, `LEVER_WEBHOOK_SECRET` | Phase 5 | Webhook signature checks |
+## Configuration (`.env.local`)
+
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase project. Used for magic-link auth and to download files from the public bucket. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Secret key (`sb_secret_…`), used by the worker only. Needed to **list** the bucket (or see the storage policy below). Never exposed to the browser. |
+| `RESUME_BUCKET` | Bucket name (default `resumes`). **The first folder of each file's path is its job**, e.g. `backend-engineer/jane.pdf`. |
+| `RESUME_SOURCE` | `local:<dir>` reads a local folder instead of the bucket. |
+| `SEED_RECRUITER_EMAIL` | Created as the org's admin on first run. |
+| `LLM_PROVIDER`, `OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_API_KEY` | Structured extraction. `ollama` with `https://ollama.com` and `gemma4:31b` uses Ollama cloud (free tier); `http://localhost:11434` and `gemma4:12b` uses a local model; `none` uses heuristics only. |
+| `RESUME_POLL_INTERVAL_MS` | How often the worker checks the bucket (default 10 s). |
+| `DATA_DIR` | Where the SQLite file lives (default `./.data`). |
+
+### Letting the worker list the bucket
+
+Supabase Storage hides objects from the publishable key unless a policy allows it. Without one, listing returns nothing, and the Resume database panel says so. Pick one:
+
+1. **Recommended:** put the project's secret key in `SUPABASE_SERVICE_ROLE_KEY`.
+2. **Prototype shortcut:** run this in the Supabase SQL Editor. It makes file *names* in the bucket listable by anyone holding the publishable key. The bucket is already public, so the files themselves are already readable by anyone who knows a URL.
+   ```sql
+   create policy "prototype: list resumes" on storage.objects
+     for select to anon using (bucket_id = 'resumes');
+   ```
+
+### Magic links
+
+In Supabase → Authentication → URL Configuration, add `http://localhost:3000/auth/callback` to Redirect URLs. If you skip that, links land on the Site URL and the app forwards them to the callback anyway.
+
+## How it works
+
+```
+bucket/<job-folder>/<file>.pdf
+  └─ ingest-resume   list → skip known paths → download → %PDF magic-byte + 10 MB check → SHA-256 dedupe
+       └─ queue: process_resume (SQLite, claim/complete/backoff → dead)
+            └─ process-resume
+                 pdf-parser        text layer per page; pages with < 40 chars → rasterize + tesseract OCR; normalize
+                 resume-extractor  heading split → Ollama JSON (Zod-validated, 1 retry) → drop skills whose quote isn't in the text
+                 needs review?     OCR < 70, < 2 sections, no dates, < 300 chars, model output invalid → kept out of decks
+                 match-scoring     v1: round(must*40 + experience*25 + domain*20 + nice*15), evidence only
+```
+
+- **Jobs come from folders.** A folder named like one of the spec's three roles (backend / data analyst / UX) gets that role's requirements. Any other folder gets requirements drafted by the model, editable in the database.
+- **Storage:** a local SQLite file (`src/lib/db.ts`) shared by the web app and the worker. Its tables mirror `supabase/migrations/20261017000001_core_schema.sql`, the Postgres schema with RLS for moving to Supabase Postgres. Every query in `src/lib/repo.ts` is scoped to the caller's org, standing in for RLS. Reviews are append-only, enforced by triggers, and status is the latest review that hasn't been undone.
+- **API** (Zod-validated, org-scoped): `GET /api/jobs`, `GET /api/jobs/[jobId]/deck?status=to_review|shortlist|pass|all`, `GET /api/applicants/[id]`, `POST /api/reviews`, `POST /api/reviews/[id]/undo` (reviewer or admin only), `GET /api/reviews/undo-stack?jobId=`, `GET|POST /api/pipeline`.
+- **UI:** the client polls every 5 s and applies optimistic updates, rolling back on error. The card on top is never replaced by a refresh, new arrivals go in by score from position 2 down, and an undone card returns to the top. The undo stack comes from the server, so it survives a reload.
+- **Model safety:** resume text is sent inside `<resume>` tags as data, never as instructions. The model only extracts; it never produces a score. Name, contact details, school and graduation year are never passed to the scorer.
 
 ## Scripts
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Dev server |
-| `npm run build` / `npm start` | Production build / server |
-| `npm run typecheck` | Generates Next route types, then runs `tsc --noEmit` (strict) |
-| `npm run lint` | ESLint (next core-web-vitals + typescript) |
-| `npm test` | Vitest unit tests (`tests/*.test.ts`) |
-| `npm run test:e2e` | Playwright + axe (`tests/e2e`). Builds the app and serves it on port 3100. Runs a desktop project and a 400px-wide phone project |
-| `npm run verify` | All of the above |
+| `npm run demo` | Web app (dev) and worker together |
+| `npm run dev` / `npm run worker` | Run them separately |
+| `npm run worker:once` | One sync and drain, then exit |
+| `npm run fixtures` | Regenerate `tests/fixtures/bucket` (14 resumes, 2 scanned, 1 two-column, 1 corrupt, 1 duplicate) |
+| `npm run bucket:inspect` | List the real bucket's folders and file counts |
+| `npm run typecheck` / `npm run lint` / `npm test` / `npm run test:e2e` | Checks. e2e builds the app, runs the real pipeline on the fixtures with the model off, then drives the UI |
+| `npm run db:migrate` | Apply the Postgres schema to Supabase (needs `DATABASE_URL`) |
 
-## Routes
-
-- `/dashboard`: all job decks with counts and the top of each deck, plus a **Needs review** list for files the pipeline couldn't process.
-- `/jobs/[jobId]`: the swipe deck for one job, with **To review / Shortlisted / Passed** tabs.
-- `/applicants/[applicantId]`: the full resume page. The same `ResumeDetail` component also opens as a modal on the deck page.
-
-## How Phase 1 works
-
-- **Mock data** (`src/lib/mock-data.ts`): 3 jobs and 14 fictional applicants. Scores are **computed, not typed in**: `scoreResume` (`src/lib/match-scoring.ts`, formula v1 `round(must*40 + experience*25 + domain*20 + nice*15)`) runs over each structured resume. That keeps reasons, breakdown bars and evidence quotes consistent. The scorer's input type has no name, contact or education fields, so those can't affect a score.
-- **State** (`src/lib/deck-reducer.ts`, a pure reducer, and `src/lib/deck-store.tsx`, the React provider): reviews are an append-only log, the same model as the Phase 2 `reviews` table. An application's status is its latest review where `undoneAt` is null. Undo sets `undoneAt` and puts the card back on top. "Move back to deck" is a `reset` review, so it can be undone too.
-- **Deck ordering:** score descending, then applied date. New arrivals and moved-back cards are inserted by rank **from position 2 down**, so the card on top is never replaced.
-- **Simulated resume database:** 4 more files are queued (one is a scanned resume that logs `OCR used on page 1`, and one is a corrupt PDF that goes to **Needs review**). One is pulled 6s after load and then every 12s. **Pause sync** and **Pull next file now** control this. The job's pill pulses green when a new applicant arrives.
-- **State lives in memory** and resets on reload. Persistence is Phase 2.
-
-### Interactions
-
-- Drag a card with mouse or touch (pointer events). It rotates slightly, and the SHORTLIST / PASS stamps fade in with distance. Past 110px it flies off. A click without movement opens the detail view.
-- Keyboard: `←` pass, `→` shortlist, `Z` or `Backspace` undo, `Enter` open, `Esc` close. Shortcuts are ignored while typing or while the modal is open.
-- Every swipe has a button equivalent: the big round buttons, the card footer icons, and the modal's Pass / Shortlist buttons.
-- After each decision a toast with **Undo** appears, and an `aria-live` region announces decisions and new arrivals.
-- The detail modal is a native `<dialog>` (`showModal()`): focus is trapped and returns to the opener on close.
-- `prefers-reduced-motion` disables the fly-off and enter animations.
-
-### Accessibility notes
-
-The spec's palette is used for fills. Two values fail WCAG AA as small text on white: `--ink-soft` (3.7:1) and white on `--green` (2.3:1). So `tokens.css` adds `--ink-muted` and darker `--*-ink` variants for text, and `--on-fill` (dark navy) for text on colored fills. axe reports zero serious or critical violations on the dashboard, deck, detail page and open modal.
-
-## Verify Phase 1
+## Verify
 
 ```bash
 npm run typecheck && npm run lint && npm test && npm run test:e2e
 ```
 
-Manual check (`npm run dev`):
-1. Open `/jobs/job-backend-java`. Drag Marcus Bell right: the card flies off, the toast says "Shortlisted Marcus Bell", and Priya Raman is on top.
-2. Press `Z`: Marcus Bell is back on top. Press `→`, open the **Shortlisted** tab, click **Move back to deck**, then press `Z`.
-3. Click the card (no drag) or press `Enter`: the modal opens with the match breakdown and resume sections. `Esc` closes it.
-4. Click **Pull next file now** twice: Aisha Karim joins the deck at position 2 (with an OCR log line), then `scan_0042.pdf` errors and appears under **Needs review** on `/dashboard`.
-5. Narrow the window to 400px: the job rail becomes a horizontal scroller and the deck stacks.
+- **Unit/integration (42):** the scoring formula, aliases, date merging, determinism, identity fields never reaching the scorer; the deck reducer (top card pinned, undo to top, move back); the PDF pipeline (magic bytes, 10 MB limit, normalization, text layer, OCR on scans, corrupt file, two-column layout, hallucinated-skill removal, prompt injection, full ingest with dedupe); org isolation (org B can't read or review org A, viewers can't review, only the reviewer or an admin can undo, reviews are append-only, rescoring adds a new row).
+- **E2E (28, desktop + 400 px):** routes render from pipeline data; swipe → undo; short drag springs back; decisions persist across a reload and in a second browser; the undo stack survives a reload; keyboard; toast undo; modal with extracted text; tabs and an undoable move back; empty deck; Needs review; 400 px layout; axe finds no serious violations.
 
-## Folder notes
+## What's real vs. stubbed
 
-The layout follows the project spec. Files added beyond the listed ones: `src/lib/{mock-data,deck-reducer,deck-store,brand}.ts(x)`, `src/styles/tokens.css`, extra presentational components in `src/components/`, and `scripts/screenshots.mjs` (dev helper: `node scripts/screenshots.mjs <out-dir>` against a running server on :3100). The empty `src/app/api/*`, `src/workers`, `src/integrations` and `supabase/migrations` folders are filled in Phases 2–5.
+| Area | State |
+| --- | --- |
+| UI (Phase 1) | Done |
+| Persistence, API, auth (Phase 2) | Works on **local SQLite** instead of Supabase Postgres (no database credentials were available). The Postgres migration with RLS is written but not applied. Magic-link auth uses Supabase Auth. |
+| PDF pipeline (Phase 3) | Done, using Ollama in place of Anthropic. The worker polls; there's no `POST /api/resumes` manual upload yet. |
+| Matching (Phase 4) | Scoring engine, evidence links and determinism/fairness tests are done. **Not done:** the labeled calibration set, the `SHOW_MATCH_SCORES` gate, `npm run calibrate`. |
+| ATS integrations, production hardening (Phases 5–6) | Not started |
+
+## Responsible use
+
+The score ranks; it never decides. Every card is decided by a person, there are no automatic rejections, and a low score only sorts a card lower. Scores are computed from quoted resume evidence against a job's written requirements. Names, contact details, schools and graduation years are excluded from scoring. Scores are uncalibrated until Phase 4's labeled set exists, so treat them as a reading order, not a judgment.

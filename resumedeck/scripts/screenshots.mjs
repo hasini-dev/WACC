@@ -4,11 +4,15 @@ import { chromium } from "@playwright/test";
 
 const out = process.argv[2] ?? ".";
 const base = process.argv[3] ?? "http://localhost:3100";
+// Job and applicant ids come from the running app's database.
+const { jobs } = await (await fetch(`${base}/api/jobs`)).json();
+const job = jobs.find((j) => /backend/i.test(j.title)) ?? jobs[0];
+const { cards } = await (await fetch(`${base}/api/jobs/${job.id}/deck?status=all`)).json();
 const views = [
-  ["deck-desktop", 1280, 1000, "/jobs/job-backend-java"],
+  ["deck-desktop", 1280, 1000, `/jobs/${job.id}`],
   ["dash-desktop", 1280, 1000, "/dashboard"],
-  ["deck-phone", 400, 900, "/jobs/job-backend-java"],
-  ["applicant", 1280, 1000, "/applicants/apl-marcus-bell"],
+  ["deck-phone", 400, 900, `/jobs/${job.id}`],
+  ["applicant", 1280, 1000, `/applicants/${cards[0].applicant.id}`],
 ];
 
 const browser = await chromium.launch();
@@ -20,7 +24,7 @@ for (const [name, width, height, path] of views) {
   });
   page.on("pageerror", (e) => problems.push(`${name} pageerror: ${e.message}`));
   await page.goto(base + path);
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1500);
   await page.screenshot({ path: `${out}/${name}.png`, fullPage: name !== "deck-phone" });
   if (name === "deck-desktop") {
     const box = await page.getByTestId("resume-card").boundingBox();

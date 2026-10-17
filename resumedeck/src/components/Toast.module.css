@@ -31,3 +31,7 @@
     opacity: 0;
   }
 }
+.toast[data-tone="error"] {
+  border-color: var(--red);
+  box-shadow: inset 4px 0 0 var(--red), 0 6px 24px rgba(0, 0, 0, 0.35);
+}

@@ -107,3 +107,12 @@
     height: 100%;
   }
 }
+
+.empty {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--navy-line);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--on-navy-soft);
+}

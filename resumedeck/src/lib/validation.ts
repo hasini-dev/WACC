@@ -40,4 +40,5 @@ export const StructuredResumeSchema = z.object({
 export const ReviewInputSchema = z.object({
   applicationId: z.string().min(1),
   decision: z.enum(["shortlist", "pass", "reset"]),
+  reason: z.string().max(500).optional(),
 });

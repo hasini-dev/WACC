@@ -16,11 +16,13 @@ export function Toast({ toast, onUndo, onDismiss }: { toast: ToastData | null; o
   if (!toast) return null;
   return (
     // Not a live region: DeckProvider's announcer already reads decisions aloud.
-    <div className={styles.toast} key={toast.id} data-testid="toast">
+    <div className={styles.toast} key={toast.id} data-testid="toast" data-tone={toast.tone}>
       <span>{toast.text}</span>
-      <button type="button" onClick={() => onUndo(toast.reviewId)}>
-        Undo
-      </button>
+      {toast.reviewId && (
+        <button type="button" onClick={() => onUndo(toast.reviewId!)}>
+          Undo
+        </button>
+      )}
     </div>
   );
 }

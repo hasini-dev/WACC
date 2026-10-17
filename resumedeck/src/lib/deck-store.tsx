@@ -1,183 +1,258 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
-import { deckReducer, initDeckState, undoStack, type DeckState } from "@/lib/deck-reducer";
-import {
-  APPLICANTS_BY_ID,
-  APPLICATIONS_BY_ID,
-  INCOMING_FILES,
-  INITIAL_APPLICATIONS,
-  JOBS_BY_ID,
-} from "@/lib/mock-data";
-import type { Applicant, Application } from "@/types/applicant";
-import type { Review } from "@/types/review";
+import { deckReducer, emptyDeckState, type DeckState } from "@/lib/deck-reducer";
+import type { Applicant } from "@/types/applicant";
+import type { DeckCard, JobSummary, Me, PipelineStatus, UndoEntry } from "@/types/api";
 
-/** First simulated arrival, then one file per interval. */
-const SYNC_FIRST_DELAY_MS = 6_000;
-const SYNC_INTERVAL_MS = 12_000;
+export const POLL_MS = 5_000;
+const SEEN_KEY = "clicked.seen.v1";
 
 export interface Toast {
   id: number;
   text: string;
-  reviewId: string;
+  reviewId?: string;
+  tone?: "error";
 }
 
 interface DeckContextValue {
+  me: Me;
   state: DeckState;
-  decide: (applicationId: string, decision: "shortlist" | "pass") => void;
-  moveBack: (applicationId: string) => void;
-  undo: (reviewId: string) => void;
-  undoLatest: (jobId: string) => Review | undefined;
+  decide: (jobId: string, applicationId: string, decision: "shortlist" | "pass") => void;
+  moveBack: (jobId: string, applicationId: string) => void;
+  undo: (jobId: string, reviewId: string) => void;
+  undoLatest: (jobId: string) => void;
+  /** Register the job whose deck should be polled (the open deck page). */
+  watchJob: (jobId: string | null) => void;
+  seen: Record<string, true>;
   markSeen: (applicationId: string) => void;
-  setSyncPaused: (paused: boolean) => void;
-  pullNext: () => void;
+  pipelineAction: (action: "pause" | "resume" | "pull") => void;
+  loadApplicant: (applicantId: string) => Promise<DeckCard | null>;
   toast: Toast | null;
   dismissToast: () => void;
 }
 
 const DeckContext = createContext<DeckContextValue | null>(null);
 
-function newReviewId(): string {
-  return `rev-${crypto.randomUUID()}`;
-}
-
-function applicantName(app: Application): string {
-  return APPLICANTS_BY_ID.get(app.applicantId)?.fullName ?? "applicant";
-}
-
-function okLabel(app: Application): string {
-  const job = JOBS_BY_ID.get(app.jobId);
-  return `${applicantName(app)} → ${app.match.score}% vs "${job?.title ?? app.jobId}"`;
-}
-
-function createInitialState(): DeckState {
-  const now = Date.now();
-  const receivedAt: Record<string, string> = {};
-  for (const a of INITIAL_APPLICATIONS) {
-    receivedAt[a.id] = new Date(now - a.receivedMinutesAgo * 60_000).toISOString();
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { ...init, headers: { "content-type": "application/json", ...init?.headers }, cache: "no-store" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Request failed (${res.status})`);
   }
-  const recent = [...INITIAL_APPLICATIONS].sort((a, b) => b.receivedMinutesAgo - a.receivedMinutesAgo).slice(-4);
-  const initialLog = recent.flatMap((a) => {
-    const ap = APPLICANTS_BY_ID.get(a.applicantId)!;
-    const at = receivedAt[a.id]!;
-    return [
-      { at, level: "db" as const, text: `DB fetched ${ap.file.fileName}` },
-      { at, level: "txt" as const, text: `TXT extracted ${ap.file.rawText.length.toLocaleString("en-US")} chars · 4 sections` },
-      { at, level: "ok" as const, text: `OK ${okLabel(a)}` },
-    ];
-  });
-  // Anything older than half an hour has already been glanced at; newer files get the "New" badge.
-  const seen = INITIAL_APPLICATIONS.filter((a) => a.receivedMinutesAgo > 30).map((a) => a.id);
-  return initDeckState({ applications: INITIAL_APPLICATIONS, receivedAt, incoming: INCOMING_FILES, initialLog, seen });
+  return (await res.json()) as T;
 }
 
-export function DeckProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(deckReducer, undefined, createInitialState);
+function readSeen(): Record<string, true> {
+  try {
+    const raw = window.localStorage.getItem(SEEN_KEY);
+    return raw ? (Object.fromEntries((JSON.parse(raw) as string[]).map((id) => [id, true])) as Record<string, true>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function DeckProvider({ me, children }: { me: Me; children: ReactNode }) {
+  const [state, dispatch] = useReducer(deckReducer, undefined, emptyDeckState);
   const [toast, setToast] = useState<Toast | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const [watchedJob, setWatchedJob] = useState<string | null>(null);
+  const [seen, setSeen] = useState<Record<string, true>>({});
   const stateRef = useRef(state);
+  const pending = useRef(0);
+  /** Undos pressed while the review was still saving; sent once the real id arrives. */
+  const pendingUndo = useRef(new Set<string>());
+  const announcedArrivals = useRef<Record<string, number>>({});
+
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setSeen(readSeen()));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   const announce = useCallback((text: string) => {
-    // Clear first so repeating the same message is still announced.
     setAnnouncement("");
     requestAnimationFrame(() => setAnnouncement(text));
   }, []);
 
-  const decide = useCallback(
-    (applicationId: string, decision: "shortlist" | "pass") => {
-      const app = stateRef.current.applications[applicationId];
-      if (!app) return;
-      const reviewId = newReviewId();
-      dispatch({ type: "decide", reviewId, applicationId, decision, now: new Date().toISOString() });
-      const text = `${decision === "shortlist" ? "Shortlisted" : "Passed on"} ${applicantName(app)}`;
-      setToast({ id: Date.now(), text, reviewId });
-      announce(text);
+  const name = (applicationId: string): string => {
+    const app = stateRef.current.applications[applicationId];
+    return (app && stateRef.current.applicants[app.applicantId]?.fullName) || "applicant";
+  };
+
+  // ─── Polling ──────────────────────────────────────────────────────────────
+  const refreshDeck = useCallback(async (jobId: string) => {
+    const [deck, stack] = await Promise.all([
+      api<{ cards: DeckCard[] }>(`/api/jobs/${encodeURIComponent(jobId)}/deck?status=all`),
+      api<{ reviews: UndoEntry[] }>(`/api/reviews/undo-stack?jobId=${encodeURIComponent(jobId)}`),
+    ]);
+    // Never apply a snapshot taken while one of our own writes was in flight.
+    if (pending.current === 0) dispatch({ type: "deckLoaded", jobId, cards: deck.cards, undo: stack.reviews });
+  }, []);
+
+  const refreshShared = useCallback(async () => {
+    const [jobs, pipeline] = await Promise.all([api<{ jobs: JobSummary[] }>("/api/jobs"), api<PipelineStatus>("/api/pipeline")]);
+    dispatch({ type: "jobsLoaded", jobs: jobs.jobs });
+    dispatch({ type: "pipelineLoaded", pipeline });
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      try {
+        await Promise.all([refreshShared(), watchedJob ? refreshDeck(watchedJob) : Promise.resolve()]);
+      } catch {
+        // Transient network errors: the next poll retries.
+      }
+    };
+    void run();
+    const id = setInterval(() => alive && void run(), POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [watchedJob, refreshDeck, refreshShared]);
+
+  // Announce new arrivals in the open deck.
+  useEffect(() => {
+    if (!watchedJob) return;
+    const n = state.arrivals[watchedJob] ?? 0;
+    const prev = announcedArrivals.current[watchedJob] ?? 0;
+    if (n > prev) announce(`${n - prev} new applicant${n - prev === 1 ? "" : "s"} added to this deck`);
+    announcedArrivals.current[watchedJob] = n;
+  }, [state.arrivals, watchedJob, announce]);
+
+  // ─── Mutations (optimistic, rolled back on error) ─────────────────────────
+  const mutate = useCallback(
+    async (jobId: string, run: () => Promise<void>) => {
+      const snapshot = stateRef.current;
+      pending.current++;
+      try {
+        await run();
+      } catch (err) {
+        dispatch({ type: "restore", state: snapshot });
+        setToast({ id: Date.now(), text: `Couldn't save: ${(err as Error).message}`, tone: "error" });
+        announce(`Couldn't save: ${(err as Error).message}`);
+      } finally {
+        pending.current--;
+        void refreshDeck(jobId).catch(() => undefined);
+      }
     },
-    [announce],
+    [announce, refreshDeck],
+  );
+
+  const confirm = useCallback(async (jobId: string, tempId: string, review: UndoEntry) => {
+    if (pendingUndo.current.delete(tempId)) {
+      await api(`/api/reviews/${encodeURIComponent(review.reviewId)}/undo`, { method: "POST" });
+      return;
+    }
+    dispatch({ type: "reviewConfirmed", jobId, tempId, review });
+    setToast((t) => (t?.reviewId === tempId ? { ...t, reviewId: review.reviewId } : t));
+  }, []);
+
+  const decide = useCallback(
+    (jobId: string, applicationId: string, decision: "shortlist" | "pass") => {
+      if (stateRef.current.status[applicationId] !== "to_review") return;
+      const tempId = `tmp-${crypto.randomUUID()}`;
+      const temp: UndoEntry = { reviewId: tempId, applicationId, decision, createdAt: new Date().toISOString() };
+      const text = `${decision === "shortlist" ? "Shortlisted" : "Passed on"} ${name(applicationId)}`;
+      dispatch({ type: "decide", jobId, review: temp });
+      setToast({ id: Date.now(), text, reviewId: tempId });
+      announce(text);
+      void mutate(jobId, async () => {
+        const { review } = await api<{ review: UndoEntry }>("/api/reviews", { method: "POST", body: JSON.stringify({ applicationId, decision }) });
+        await confirm(jobId, tempId, review);
+      });
+    },
+    [announce, mutate, confirm],
   );
 
   const moveBack = useCallback(
-    (applicationId: string) => {
-      const app = stateRef.current.applications[applicationId];
-      if (!app) return;
-      const reviewId = newReviewId();
-      dispatch({ type: "reset", reviewId, applicationId, now: new Date().toISOString() });
-      const text = `Moved ${applicantName(app)} back to the deck`;
-      setToast({ id: Date.now(), text, reviewId });
+    (jobId: string, applicationId: string) => {
+      const tempId = `tmp-${crypto.randomUUID()}`;
+      dispatch({ type: "reset", jobId, review: { reviewId: tempId, applicationId, decision: "reset", createdAt: new Date().toISOString() } });
+      const text = `Moved ${name(applicationId)} back to the deck`;
+      setToast({ id: Date.now(), text, reviewId: tempId });
       announce(text);
+      void mutate(jobId, async () => {
+        const { review } = await api<{ review: UndoEntry }>("/api/reviews", {
+          method: "POST",
+          body: JSON.stringify({ applicationId, decision: "reset" }),
+        });
+        await confirm(jobId, tempId, review);
+      });
     },
-    [announce],
+    [announce, mutate, confirm],
   );
 
   const undo = useCallback(
-    (reviewId: string) => {
-      const review = stateRef.current.reviews.find((r) => r.id === reviewId && r.undoneAt === null);
-      if (!review) return;
-      dispatch({ type: "undo", reviewId, now: new Date().toISOString() });
+    (jobId: string, reviewId: string) => {
+      const entry = stateRef.current.undo[jobId]?.find((e) => e.reviewId === reviewId);
+      if (!entry) return;
+      dispatch({ type: "undo", jobId, reviewId });
       setToast(null);
-      const app = stateRef.current.applications[review.applicationId];
-      if (app) announce(`Undid ${review.decision === "reset" ? "move back" : review.decision} for ${applicantName(app)}`);
+      announce(`Undid ${entry.decision === "reset" ? "move back" : entry.decision} for ${name(entry.applicationId)}`);
+      if (reviewId.startsWith("tmp-")) {
+        // Still saving: `confirm` sends the undo once the server returns the real id.
+        pendingUndo.current.add(reviewId);
+        return;
+      }
+      void mutate(jobId, async () => {
+        await api(`/api/reviews/${encodeURIComponent(reviewId)}/undo`, { method: "POST" });
+      });
     },
-    [announce],
+    [announce, mutate],
   );
 
   const undoLatest = useCallback(
     (jobId: string) => {
-      const latest = undoStack(stateRef.current, jobId)[0];
-      if (latest) undo(latest.id);
-      return latest;
+      const latest = stateRef.current.undo[jobId]?.[0];
+      if (latest) undo(jobId, latest.reviewId);
     },
     [undo],
   );
 
-  const pullNext = useCallback(() => {
-    const next = stateRef.current.incoming[0];
-    if (!next) return;
-    const now = new Date().toISOString();
-    if (next.kind === "corrupt") {
-      dispatch({ type: "pullNext", now });
-      return;
-    }
-    const base = APPLICATIONS_BY_ID.get(next.applicationId);
-    if (!base) return;
-    const app: Application = {
-      id: base.id,
-      applicantId: base.applicantId,
-      jobId: base.jobId,
-      appliedAt: now,
-      match: base.match,
-    };
-    dispatch({ type: "pullNext", now, incomingApplication: app, label: okLabel(app) });
-    const job = JOBS_BY_ID.get(app.jobId);
-    announce(`New applicant for ${job?.title ?? "a job"}: ${applicantName(app)}`);
-  }, [announce]);
+  const markSeen = useCallback((applicationId: string) => {
+    setSeen((s) => {
+      if (s[applicationId]) return s;
+      const next = { ...s, [applicationId]: true as const };
+      try {
+        window.localStorage.setItem(SEEN_KEY, JSON.stringify(Object.keys(next).slice(-2000)));
+      } catch {
+        /* storage unavailable */
+      }
+      return next;
+    });
+  }, []);
 
-  const markSeen = useCallback((applicationId: string) => dispatch({ type: "markSeen", applicationId }), []);
-  const setSyncPaused = useCallback((paused: boolean) => dispatch({ type: "setSyncPaused", paused }), []);
+  const pipelineAction = useCallback(
+    (action: "pause" | "resume" | "pull") => {
+      void api("/api/pipeline", { method: "POST", body: JSON.stringify({ action }) })
+        .then(() => refreshShared())
+        .catch((err: Error) => setToast({ id: Date.now(), text: err.message, tone: "error" }));
+      if (action === "pull") setTimeout(() => void refreshShared().catch(() => undefined), 1500);
+    },
+    [refreshShared],
+  );
+
+  const loadApplicant = useCallback(async (applicantId: string) => {
+    try {
+      const { card } = await api<{ card: DeckCard }>(`/api/applicants/${encodeURIComponent(applicantId)}`);
+      return card;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const watchJob = useCallback((jobId: string | null) => setWatchedJob(jobId), []);
   const dismissToast = useCallback(() => setToast(null), []);
 
-  // Simulated resume-database sync: pull one file per interval until empty.
-  const syncPaused = state.syncPaused;
-  const hasIncoming = state.incoming.length > 0;
-  useEffect(() => {
-    if (syncPaused || !hasIncoming) return;
-    let interval: ReturnType<typeof setInterval> | undefined;
-    const first = setTimeout(() => {
-      pullNext();
-      interval = setInterval(pullNext, SYNC_INTERVAL_MS);
-    }, SYNC_FIRST_DELAY_MS);
-    return () => {
-      clearTimeout(first);
-      if (interval) clearInterval(interval);
-    };
-  }, [syncPaused, hasIncoming, pullNext]);
-
   const value = useMemo<DeckContextValue>(
-    () => ({ state, decide, moveBack, undo, undoLatest, markSeen, setSyncPaused, pullNext, toast, dismissToast }),
-    [state, decide, moveBack, undo, undoLatest, markSeen, setSyncPaused, pullNext, toast, dismissToast],
+    () => ({ me, state, decide, moveBack, undo, undoLatest, watchJob, seen, markSeen, pipelineAction, loadApplicant, toast, dismissToast }),
+    [me, state, decide, moveBack, undo, undoLatest, watchJob, seen, markSeen, pipelineAction, loadApplicant, toast, dismissToast],
   );
 
   return (
@@ -196,6 +271,4 @@ export function useDeck(): DeckContextValue {
   return ctx;
 }
 
-export function getApplicant(id: string): Applicant | undefined {
-  return APPLICANTS_BY_ID.get(id);
-}
+export type { Applicant };
