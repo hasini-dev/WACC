@@ -1,0 +1,81 @@
+@import "../styles/tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* 2. Apply the variable to the background-image property */
+  background-image: var(--bg-image1);
+  
+  /* 3. Recommended styles to make the background look clean */
+  background-repeat: no-repeat;  /* Prevents the image from tiling */
+  background-position: center;   /* Centers the image on the screen */
+  background-size: cover;        /* Stretches the image to fill the screen */
+  background-attachment: fixed;  /* Keeps the background stable while scrolling */
+
+  margin: 0;
+  min-height: 100vh;
+  /* A card flying off-screen must not create a horizontal scrollbar. `clip` keeps sticky working. */
+  overflow-x: clip;
+  /*background: var(--navy);*/
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--blue-ink);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* A white Tumblr "post". */
+.post {
+  background: var(--paper);
+  border-radius: var(--radius);
+  color: var(--ink);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
