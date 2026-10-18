@@ -43,6 +43,11 @@ export async function getMe(): Promise<AuthResult> {
   const { data } = await supabase.auth.getUser();
   const user = data.user;
   if (!user?.email) return { error: "signed_out" };
-  const me = memberForUser(user.id, user.email);
+  let me = memberForUser(user.id, user.email);
+  // Demo mode: anyone who signs in joins the org instead of being turned away.
+  if (!me && process.env.DEMO_OPEN_SIGNUP === "1") {
+    addMember(orgId, user.id, user.email, "admin");
+    me = memberForUser(user.id, user.email);
+  }
   return me ? { me } : { error: "not_member", email: user.email };
 }
