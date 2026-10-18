@@ -1,0 +1,49 @@
+{
+  "name": "resumedeck",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "next typegen && tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run test:e2e",
+    "db:migrate": "node --env-file-if-exists=.env.local --import tsx scripts/migrate.mts",
+    "bucket:inspect": "node --env-file-if-exists=.env.local --import tsx scripts/inspect-bucket.mts",
+    "worker": "node --env-file-if-exists=.env.local --import tsx src/workers/run.mts",
+    "worker:once": "node --env-file-if-exists=.env.local --import tsx src/workers/run.mts --once",
+    "fixtures": "node --import tsx scripts/make-fixtures.mts",
+    "demo": "node scripts/demo.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "1.0.9",
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.118.0",
+    "next": "16.3.8",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "server-only": "0.0.1",
+    "tesseract.js": "7.0.0",
+    "unpdf": "1.8.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.8",
+    "pdf-lib": "1.17.1",
+    "pg": "8.23.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}
