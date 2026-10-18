@@ -16,6 +16,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const auth = await getMe();
   if ("me" in auth) redirect("/dashboard");
   const { error } = await searchParams;
+  const demo = process.env.DEMO_OPEN_SIGNUP === "1";
   const key = typeof error === "string" ? error : auth.error === "not_member" ? "not_member" : "";
   return (
     <main className={styles.wrap}>
@@ -29,13 +30,15 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         <h1 id="login-heading" className={styles.h1}>
           Sign in
         </h1>
-        <p className={styles.sub}>We&apos;ll email you a magic link. No password needed.</p>
+        <p className={styles.sub}>
+          {demo ? "Demo mode: enter any email to sign in." : "We'll email you a magic link. No password needed."}
+        </p>
         {ERRORS[key] && (
           <p className={styles.error} role="alert">
             {ERRORS[key]}
           </p>
         )}
-        <LoginForm />
+        <LoginForm demo={demo} />
       </section>
     </main>
   );
