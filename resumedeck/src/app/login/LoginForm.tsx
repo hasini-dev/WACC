@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { supabaseBrowser } from "@/lib/supabase";
 import styles from "./login.module.css";
 
-export function LoginForm() {
+export function LoginForm({ demo = false }: { demo?: boolean }) {
   const [email, setEmail] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [message, setMessage] = useState("");
@@ -12,6 +12,22 @@ export function LoginForm() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setState("sending");
+    if (demo) {
+      // Demo mode signs in directly, skipping the email (see /api/auth/demo-login).
+      const res = await fetch("/api/auth/demo-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      if (res.ok) {
+        window.location.assign("/dashboard");
+      } else {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setState("error");
+        setMessage(body.error ?? "Sign-in failed");
+      }
+      return;
+    }
     const { error } = await supabaseBrowser().auth.signInWithOtp({
       email: email.trim(),
       options: { emailRedirectTo: `${window.location.origin}/auth/callback`, shouldCreateUser: true },
@@ -45,7 +61,7 @@ export function LoginForm() {
         placeholder="you@company.com"
       />
       <button type="submit" disabled={state === "sending"}>
-        {state === "sending" ? "Sending…" : "Email me a link"}
+        {state === "sending" ? (demo ? "Signing in…" : "Sending…") : demo ? "Sign in" : "Email me a link"}
       </button>
       {state === "error" && (
         <p className={styles.error} role="alert">
