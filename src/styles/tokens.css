@@ -1,0 +1,57 @@
+:root {
+  /* Page */
+  --navy: #72086b;
+  --navy-deep: #e55edc;
+  --navy-line: #35093a;
+
+  /* Posts */
+  --paper: #ffffff;
+  --paper-2: #f4f6f8;
+  --ink: #444444;
+  --ink-soft: #13213b; /* decorative / large text only: 3.7:1 on white */
+  --ink-muted: #112033; /* small secondary text: 5:1 on white (AA) */
+  --rule: #e6e9ed;
+
+  --on-navy: #ffffff;
+  --on-navy-soft: #061a33;
+
+  /* Tumblr post-type colors (fills) */
+  --blue: #529ecc;
+  --green: #56bc8a;
+  --red: #d95e40;
+  --yellow: #f2992e;
+  --purple: #a77dc2;
+  --pink: #e17bae;
+
+  /* Same hues darkened for text/icons on white (all ≥ 4.5:1) */
+  --blue-ink: #2a6f9b;
+  --green-ink: #217a4f;
+  --red-ink: #b2412a;
+  --yellow-ink: #9a5a0c;
+  --purple-ink: #7a4f96;
+  --pink-ink: #a83c72;
+
+  /* Text on colored fills (≥ 4.6:1 on every post-type color, including red and purple) */
+  --on-fill: #470646; 
+
+  /* Type */
+  --font-display: var(--font-montserrat), "Helvetica Neue", Arial, sans-serif;
+  --font-body: var(--font-source-sans), "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-source-code), ui-monospace, Menlo, monospace;
+
+  /* Shape */
+  --radius: 4px;
+  --topbar-h: 54px;
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--navy-deep);
+
+  /*images*/
+  --bg-image1: url("/assets/Background2.jpg");
+  --button-image1: url("/assets/Button1.png");
+  --bg-image2: url("/assets/Background3.jpg");
+  --smiski1: url("/assets/ProfilePic_1.jpg");
+  --smiski2: url("/assets/ProfilePic_2.png");
+  --smiski3: url("/assets/ProfilePic_3.jpg");
+  --smiski4: url("/assets/ProfilePic_4.jpg");
+  --smiski5: url("/assets/ProfilePic_5.jpg");
+  --smiski6: url("/assets/ProfilePic_6.jpg");
+}

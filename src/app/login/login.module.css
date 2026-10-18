@@ -1,0 +1,111 @@
+.wrap {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 72px 16px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 22px;
+  color: var(--on-navy);
+}
+body {
+  /* Replace with the path to your image */
+  /*background-image: var(--background1); */
+  
+  /* Prevents the image from repeating like a tile */
+  background-repeat: no-repeat; 
+  
+  /* Centers the image both horizontally and vertically */
+  background-position: center center; 
+  
+  /* Makes the image scale to cover the entire background area */
+  background-size: cover; 
+  
+  /* Optional: Keeps the background fixed in place when scrolling */
+  background-attachment: fixed; 
+  
+  /* Optional: Ensures the body fills the entire browser window */
+  min-height: 100vh;
+  margin: 0;
+}
+.mark {
+  display: block;
+  width: 32px; /* use 40px in login.module.css if you want it larger there */
+  height: 32px;
+  object-fit: contain;
+  border-radius: var(--radius);
+  /*background: var(--paper);
+  color: var(--navy-deep);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 28px;
+  padding-bottom: 4px;*/
+}
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 30px;
+  letter-spacing: -0.02em;
+}
+.card {
+  padding: 22px;
+}
+.h1 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 22px;
+}
+.sub {
+  margin: 4px 0 16px;
+  color: var(--ink-muted);
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.form label {
+  font-weight: 600;
+  font-size: 14px;
+}
+.form input {
+  padding: 10px 12px;
+  border: 1px solid #c9cfd6;
+  border-radius: var(--radius);
+  font: inherit;
+}
+.form button {
+  margin-top: 6px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: var(--radius);
+  background-image: var(--button-image1);
+  /*background: var(--blue);*/
+  color: var(--on-fill);
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+}
+.form button:disabled {
+  opacity: 0.6;
+}
+.error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-left: 4px solid var(--red);
+  background: #fbe3dc;
+  color: var(--red-ink);
+  font-size: 14px;
+}
+.form .error {
+  margin: 6px 0 0;
+}
+.sent {
+  margin: 0;
+  padding: 12px;
+  border-left: 4px solid var(--green);
+  background: #dcf3e7;
+}
